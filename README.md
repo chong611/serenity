@@ -2,6 +2,8 @@
 
 本项目抓取 `x_curl/` 中的 X GraphQL curl，解析 `@aleabitoreddit` 的帖子、回复、订阅帖，抽取 `$SYMBOL`，写入本地 SQLite，并用 Yahoo chart 接口下载日线价格。
 
+![Serenity dashboard screenshot](docs/assets/serenity-dashboard.png)
+
 > 本项目仅用于研究和可视化，不构成投资建议。
 
 ## 快速开始
@@ -69,6 +71,8 @@ python3 scripts/ingest.py stats
 # Serenity Signal Dashboard (English)
 
 This project reads X GraphQL curl commands from `x_curl/`, parses posts, replies, and premium posts from `@aleabitoreddit`, extracts `$SYMBOL` mentions, stores them in a local SQLite database, and downloads daily price bars from Yahoo's chart API.
+
+![Serenity dashboard screenshot](docs/assets/serenity-dashboard.png)
 
 > This project is for research and visualization only. It is not financial advice.
 
