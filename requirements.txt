@@ -1,3 +1,5 @@
 # Main dashboard and Yahoo ingestion use only the Python standard library.
 # Required for scripts/fetch_tv_price.py TradingView backfill helper.
 tradingview-scraper==0.4.20
+# Required for scripts/translate_zh.py Chinese translation helper.
+deep-translator==1.11.4

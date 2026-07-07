@@ -149,7 +149,7 @@ function renderChart(data) {
             title: items => items[0].raw?.mention ? fmtDate(items[0].raw.mention.mentioned_at) : items[0].label,
             label: item => {
               if (!item.raw?.mention) return `${money(item.parsed.y)}`;
-              return [`${data.symbol} 收盘 ${money(item.parsed.y)}`, ...wrapTooltipText(item.raw.mention.text)];
+              return [`${data.symbol} 收盘 ${money(item.parsed.y)}`, ...wrapTooltipText(item.raw.mention.text_zh || item.raw.mention.text)];
             }
           }
         }
@@ -162,7 +162,7 @@ function renderFeed(items) {
   $('feed').innerHTML = items.map(i => `
     <article class="feed-item">
       <div><span class="ticker">$${i.symbol}</span> <span class="tiny">${fmtDate(i.mentioned_at)} / ${sourceLabel(i.source)}</span></div>
-      <p>${escapeHtml(clip(i.text, 340))}</p>
+      <p>${escapeHtml(clip(i.text_zh || i.text, 340))}</p>
       <a href="${i.url}" target="_blank" rel="noreferrer">在 X 上查看</a>
     </article>
   `).join('');

@@ -57,7 +57,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/feed":
             limit = int((query.get("limit") or [80])[0])
             return {"items": [dict(r) for r in con.execute(
-                """select m.symbol, m.mentioned_at, m.text, t.url, t.favorite_count, t.reply_count, t.source
+                """select m.symbol, m.mentioned_at, m.text, t.text_zh, t.url, t.favorite_count, t.reply_count, t.source
                        from mentions m join tweets t on t.tweet_id=m.tweet_id
                        order by m.mentioned_at desc limit ?""", (limit,))]}
         if path.startswith("/api/symbol/"):
@@ -96,7 +96,7 @@ def symbol_payload(con, symbol):
         "select date, close, volume from prices where symbol=? order by date", (symbol,)
     )]
     mentions = [dict(r) for r in con.execute(
-        """select m.symbol, m.mentioned_at, m.text, t.url, t.favorite_count, t.reply_count, t.retweet_count, t.source
+        """select m.symbol, m.mentioned_at, m.text, t.text_zh, t.url, t.favorite_count, t.reply_count, t.retweet_count, t.source
                from mentions m join tweets t on t.tweet_id=m.tweet_id
                where m.symbol=? order by m.mentioned_at""", (symbol,)
     )]
