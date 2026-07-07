@@ -72,8 +72,8 @@ function renderSymbols() {
   $('symbols').innerHTML = visibleSymbols().map(s => `
     <button class="symbol-row ${state.active === s.symbol ? 'active' : ''}" data-symbol="${s.symbol}">
       <span class="ticker">${s.symbol}</span>
-      <span><b>${s.mention_count}</b> mentions<br><span class="tiny">latest ${fmtDate(s.latest_mention)}</span></span>
-      <span class="badge">${s.has_prices ? money(s.last_close) : 'no price'}</span>
+      <span><b>${s.mention_count}</b> 次提及<br><span class="tiny">最新 ${fmtDate(s.latest_mention)}</span></span>
+      <span class="badge">${s.has_prices ? money(s.last_close) : '无价格'}</span>
     </button>
   `).join('');
   document.querySelectorAll('.symbol-row').forEach(btn => btn.onclick = () => selectSymbol(btn.dataset.symbol));
@@ -86,10 +86,10 @@ async function selectSymbol(symbol) {
   const info = state.symbols.find(s => s.symbol === symbol) || {};
   $('activeTitle').textContent = `$${symbol}`;
   $('activeMeta').innerHTML = [
-    `${info.mention_count || 0} mentions`,
-    `${data.prices.length} bars`,
-    `first ${fmtDate(info.first_mention)}`,
-    `latest ${fmtDate(info.latest_mention)}`
+    `${info.mention_count || 0} 次提及`,
+    `${data.prices.length} 个交易日`,
+    `首次 ${fmtDate(info.first_mention)}`,
+    `最新 ${fmtDate(info.latest_mention)}`
   ].map(x => `<span>${x}</span>`).join('');
   $('neighbors').innerHTML = (data.neighbors || []).slice(0, 12).map(n => `<span>${n.symbol} x${n.count}</span>`).join('');
   renderChart(data);
@@ -149,7 +149,7 @@ function renderChart(data) {
             title: items => items[0].raw?.mention ? fmtDate(items[0].raw.mention.mentioned_at) : items[0].label,
             label: item => {
               if (!item.raw?.mention) return `${money(item.parsed.y)}`;
-              return [`${data.symbol} close ${money(item.parsed.y)}`, ...wrapTooltipText(item.raw.mention.text)];
+              return [`${data.symbol} 收盘 ${money(item.parsed.y)}`, ...wrapTooltipText(item.raw.mention.text)];
             }
           }
         }
@@ -161,11 +161,15 @@ function renderChart(data) {
 function renderFeed(items) {
   $('feed').innerHTML = items.map(i => `
     <article class="feed-item">
-      <div><span class="ticker">$${i.symbol}</span> <span class="tiny">${fmtDate(i.mentioned_at)} / ${i.source}</span></div>
+      <div><span class="ticker">$${i.symbol}</span> <span class="tiny">${fmtDate(i.mentioned_at)} / ${sourceLabel(i.source)}</span></div>
       <p>${escapeHtml(clip(i.text, 340))}</p>
-      <a href="${i.url}" target="_blank" rel="noreferrer">open on X</a>
+      <a href="${i.url}" target="_blank" rel="noreferrer">在 X 上查看</a>
     </article>
   `).join('');
+}
+
+function sourceLabel(source) {
+  return { posts: '帖子', replies: '回复', premium: '订阅帖' }[source] || source;
 }
 
 function escapeHtml(s) {
