@@ -28,6 +28,10 @@ export/
 # Browser-copied X curl commands contain cookies/tokens
 x_curl/*.curl
 
+# HeroSMS API key (secret) — never commit
+.herosms.key
+herosms.key
+
 # Logs and OS/editor noise
 *.log
 .DS_Store

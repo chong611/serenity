@@ -82,6 +82,17 @@ python3 skills/serenity-stock-scorer/scripts/score_serenity_stock.py NVDA --pret
 
 该 skill 默认查找 `data/serenity.sqlite`；如果数据库在其他位置，可以传 `--db /path/to/serenity.sqlite` 或设置 `SERENITY_DB_PATH`。
 
+## HeroSMS 虚拟号码工具
+
+`scripts/herosms.py` 是一个仅依赖标准库的命令行工具，用于通过 [HeroSMS](https://hero-sms.com/) 领取虚拟号码、筛选 $0.15 以下的号码，并在注册 kimi.com 时接收短信验证码。用法见 [`docs/herosms.md`](docs/herosms.md)。
+
+```bash
+export HEROSMS_API_KEY=你的APIKEY
+python3 scripts/herosms.py services --search kimi     # 找到 kimi 的服务代码
+python3 scripts/herosms.py prices --service kimi --max 0.15   # 找 $0.15 以下的号码
+python3 scripts/herosms.py register --service kimi --max 0.15 # 买号 + 等验证码
+```
+
 ---
 
 # Serenity Signal Dashboard (English)
@@ -167,3 +178,14 @@ python3 skills/serenity-stock-scorer/scripts/score_serenity_stock.py NVDA --pret
 ```
 
 The skill looks for `data/serenity.sqlite` by default. If your database lives elsewhere, pass `--db /path/to/serenity.sqlite` or set `SERENITY_DB_PATH`.
+
+## HeroSMS Virtual Number Tool
+
+`scripts/herosms.py` is a standard-library-only CLI for [HeroSMS](https://hero-sms.com/): find a virtual number under $0.15, buy it, and receive the SMS verification code while registering a kimi.com account. See [`docs/herosms.md`](docs/herosms.md) for the full guide.
+
+```bash
+export HEROSMS_API_KEY=your_api_key
+python3 scripts/herosms.py services --search kimi        # find kimi's service code
+python3 scripts/herosms.py prices --service kimi --max 0.15   # numbers below $0.15
+python3 scripts/herosms.py register --service kimi --max 0.15 # buy + wait for code
+```
