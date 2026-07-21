@@ -13,7 +13,8 @@ The tool reads the key from, in priority order:
 
 1. `--api-key` on the command line (avoid — visible in shell history)
 2. the `HEROSMS_API_KEY` environment variable **(recommended)**
-3. a key file: `--key-file PATH`, or `./.herosms.key`, or `~/.herosms.key`
+3. a non-empty key file: `--key-file PATH`, or `.herosms.key` in the current
+   directory, the repo root, or your home directory (`~/.herosms.key`)
 
 ```bash
 export HEROSMS_API_KEY=your_api_key_here
@@ -61,9 +62,10 @@ every price.
 
 ## 4a. One-shot guided flow (recommended)
 
-`register` buys the cheapest in-budget number, prints it, waits for the SMS
-code, and — if no code arrives before `--timeout` — **cancels for a refund**
-automatically:
+`register` looks up prices, buys the **cheapest in-budget** number (pick a
+specific country with `--country`), prints it, waits for the SMS code, and — if
+no code arrives before `--timeout`, or the run is interrupted (network error /
+Ctrl-C) — **cancels for a refund** automatically:
 
 ```bash
 python3 scripts/herosms.py register --service kimi --max 0.15
@@ -126,8 +128,13 @@ Global flags: `--json` (machine-readable output), `--api-key`, `--key-file`,
 
 - **Money:** `order` and `register` spend real balance. Both cap the price at
   `--max` (default `$0.15`), so a purchase fails with `WRONG_MAX_PRICE` rather
-  than overspending. `register` auto-cancels for a refund if no SMS arrives in
-  time. Refunds are only possible inside HeroSMS's free-cancel window.
+  than overspending (a negative `--max` is rejected on purchases so it can't
+  silently remove the cap). `register` auto-cancels for a refund if no SMS
+  arrives in time or the run is interrupted. Refunds are only possible inside
+  HeroSMS's free-cancel window.
+- **Cheapest country:** omit `--country` and `order`/`register` query prices and
+  pick the cheapest in-stock country within `--max` for you; pass `--country`
+  to pin a specific one.
 - **Cancellation window:** a very fast `cancel` can return `EARLY_CANCEL_DENIED`
   (HeroSMS enforces a short minimum hold). Wait a few seconds and retry.
 - **Respect terms of service.** Use this only for accounts you are allowed to

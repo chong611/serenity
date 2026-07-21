@@ -27,7 +27,8 @@ Provide it via, in priority order:
 
     1. --api-key on the command line (avoid; visible in shell history)
     2. HEROSMS_API_KEY environment variable            (recommended)
-    3. a key file: --key-file PATH, or ./ .herosms.key, or ~/.herosms.key
+    3. a key file: --key-file PATH, or a non-empty .herosms.key in the current
+       directory, the repo root, or your home directory (~/.herosms.key)
 
 Example::
 
@@ -42,6 +43,7 @@ import json
 import os
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -67,7 +69,7 @@ _ERROR_TOKENS = {
     "BAD_ACTION", "BAD_KEY", "NO_KEY", "BANNED", "ACCOUNT_INACTIVE",
     "BAD_SERVICE", "WRONG_SERVICE", "BAD_STATUS", "WRONG_COUNTRY",
     "BAD_DURATION", "WRONG_CURRENCY", "NO_NUMBERS", "NO_BALANCE",
-    "NO_ACTIVATION", "SERVICE_NOT_AVAILABLE", "SIM_OFFLINE",
+    "NO_ACTIVATION", "NO_ACTIVATIONS", "SERVICE_NOT_AVAILABLE", "SIM_OFFLINE",
     "OPERATORS_NOT_FOUND", "WRONG_ACTIVATION_ID", "WRONG_MAX_PRICE",
     "UNPROCESSABLE_ENTITY", "ORDER_ALREADY_EXISTS", "EARLY_CANCEL_DENIED",
     "FREE_CANCELLATION_EXPIRED", "ACTIVATION_NOT_ACTIVE", "ERROR_SQL",
@@ -134,6 +136,10 @@ class HeroSMS:
             raise HeroSMSError("SERVER_ERROR", f"HTTP {exc.code}") from exc
         except urllib.error.URLError as exc:  # pragma: no cover - network
             raise HeroSMSError("SERVER_ERROR", str(exc.reason)) from exc
+        except (TimeoutError, OSError) as exc:  # pragma: no cover - network
+            # Read-phase timeouts raise socket.timeout/TimeoutError, which is a
+            # sibling of URLError (both OSError) and would otherwise escape.
+            raise HeroSMSError("SERVER_ERROR", str(exc)) from exc
         self._raise_for_error(body)
         return body
 
@@ -234,13 +240,63 @@ def _flatten_prices(prices: dict, wanted_service=None):
                 cost = float(cost)
             except (TypeError, ValueError):
                 continue
+            try:
+                # count may arrive as int, float, or a stringified number.
+                count = int(float(count)) if count is not None else None
+            except (TypeError, ValueError):
+                count = None
             rows.append({
                 "country": str(country_id),
                 "service": service,
                 "cost": cost,
-                "count": int(count) if count is not None else None,
+                "count": count,
             })
     return rows
+
+
+def _in_budget(rows, max_price):
+    """Keep in-stock rows within budget, cheapest first."""
+    rows = [r for r in rows if (r["count"] is None or r["count"] > 0)]
+    if max_price is not None:
+        rows = [r for r in rows if r["cost"] <= max_price + 1e-9]
+    rows.sort(key=lambda r: (r["cost"], -(r["count"] or 0)))
+    return rows
+
+
+def _pick_cheapest_country(client: HeroSMS, service: str, max_price):
+    """(country_id, cost, name) for the cheapest in-stock in-budget country,
+    or None if the price lookup fails or nothing qualifies."""
+    try:
+        rows = _flatten_prices(client.get_prices(service=service),
+                               wanted_service=service)
+    except HeroSMSError:
+        return None
+    rows = _in_budget(rows, max_price)
+    if not rows:
+        return None
+    best = rows[0]
+    name = _country_names(client).get(best["country"], best["country"])
+    return best["country"], best["cost"], name
+
+
+def _reject_negative_max(args) -> None:
+    """A negative --max on a paid command would silently remove the price cap."""
+    if args.max is not None and args.max < 0:
+        raise HeroSMSError(
+            "BAD_REQUEST",
+            "a negative --max would remove your price cap on a purchase. Pass a "
+            "positive budget (e.g. --max 0.15) or omit --max for the default.")
+
+
+def _safe_cancel(client: HeroSMS, activation_id, keep: bool) -> bool:
+    """Best-effort refund. Returns True only if the cancel call succeeded."""
+    if keep:
+        return False
+    try:
+        client.set_status(activation_id, STATUS_CANCEL)
+        return True
+    except HeroSMSError:
+        return False
 
 
 # --------------------------------------------------------------------------- #
@@ -312,13 +368,10 @@ def cmd_countries(client: HeroSMS, args) -> int:
 
 
 def cmd_prices(client: HeroSMS, args) -> int:
+    # For the read-only prices view, "--max -1" (or any negative) means no cap.
+    max_price = None if (args.max is not None and args.max < 0) else args.max
     prices = client.get_prices(service=args.service, country=args.country)
-    rows = _flatten_prices(prices, wanted_service=args.service)
-    # Keep only in-stock numbers within budget.
-    rows = [r for r in rows if (r["count"] is None or r["count"] > 0)]
-    if args.max is not None:
-        rows = [r for r in rows if r["cost"] <= args.max + 1e-9]
-    rows.sort(key=lambda r: (r["cost"], -(r["count"] or 0)))
+    rows = _in_budget(_flatten_prices(prices, wanted_service=args.service), max_price)
     if args.top:
         rows = rows[: args.top]
 
@@ -330,7 +383,7 @@ def cmd_prices(client: HeroSMS, args) -> int:
         print(json.dumps(rows, ensure_ascii=False))
         return 0
     if not rows:
-        budget = f" below {args.max:g}" if args.max is not None else ""
+        budget = f" below {max_price:g}" if max_price is not None else ""
         print(f"No in-stock numbers for service {args.service!r}{budget}. "
               "Try raising --max or a different service code.")
         return 1
@@ -338,19 +391,35 @@ def cmd_prices(client: HeroSMS, args) -> int:
     for r in rows:
         stock = "?" if r["count"] is None else r["count"]
         print(f"{r['cost']:>7.3f}  {stock:>6}  {r['country']:>4}  {r['country_name']}")
+    hint_max = max_price if max_price is not None else DEFAULT_MAX_PRICE
     print(f"\nCheapest: {rows[0]['country_name']} (country id {rows[0]['country']}) "
           f"at {rows[0]['cost']:.3f}. Buy it with:\n"
           f"  python3 scripts/herosms.py order --service {args.service} "
-          f"--country {rows[0]['country']} --max {args.max if args.max is not None else DEFAULT_MAX_PRICE:g}")
+          f"--country {rows[0]['country']} --max {hint_max:g}")
     return 0
 
 
+def _resolve_country(client: HeroSMS, args, announce: bool):
+    """Use --country if given, else auto-pick the cheapest in-budget country."""
+    if args.country is not None:
+        return args.country
+    pick = _pick_cheapest_country(client, args.service, args.max)
+    if pick is None:
+        return None  # fall back to the provider default country
+    if announce:
+        print(f"Cheapest in-budget country: {pick[2]} (id {pick[0]}) at {pick[1]:.3f}")
+    return pick[0]
+
+
 def cmd_order(client: HeroSMS, args) -> int:
+    _reject_negative_max(args)
+    country = _resolve_country(client, args, announce=not args.json)
     activation_id, phone = client.get_number(
-        service=args.service, country=args.country, max_price=args.max,
+        service=args.service, country=country, max_price=args.max,
         operator=args.operator)
     if args.json:
-        print(json.dumps({"activation_id": activation_id, "phone": phone}))
+        print(json.dumps({"activation_id": activation_id, "phone": phone,
+                          "country": country}))
     else:
         print(f"Ordered.  activation id: {activation_id}")
         print(f"Phone number: {phone}")
@@ -376,7 +445,8 @@ def _print_code_result(head: str, code: str | None, args, activation_id) -> int:
 
 
 def cmd_code(client: HeroSMS, args) -> int:
-    deadline = time.monotonic() + args.timeout
+    start = time.monotonic()
+    deadline = start + args.timeout
     while True:
         head, code = client.get_status(args.id)
         if head == "STATUS_OK":
@@ -390,9 +460,9 @@ def cmd_code(client: HeroSMS, args) -> int:
         if not args.wait or time.monotonic() >= deadline:
             return _print_code_result(head, code, args, args.id)
         if not args.json:
-            waited = int(time.monotonic() - (deadline - args.timeout))
-            print(f"  waiting for SMS… ({head}, {waited}s)", file=sys.stderr)
-        time.sleep(args.interval)
+            print(f"  waiting for SMS… ({head}, {int(time.monotonic() - start)}s)",
+                  file=sys.stderr)
+        time.sleep(max(0, args.interval))
 
 
 def cmd_ready(client: HeroSMS, args) -> int:
@@ -437,35 +507,52 @@ def cmd_activations(client: HeroSMS, args) -> int:
 
 def cmd_register(client: HeroSMS, args) -> int:
     """Full guided flow: buy the cheapest in-budget number, wait for the code."""
+    _reject_negative_max(args)
     if not args.json:
         try:
             print(f"Balance: {client.get_balance():.2f}")
         except HeroSMSError:
             pass
 
+    country = _resolve_country(client, args, announce=not args.json)
     activation_id, phone = client.get_number(
-        service=args.service, country=args.country, max_price=args.max,
+        service=args.service, country=country, max_price=args.max,
         operator=args.operator)
-    if not args.json:
-        print("─" * 48)
-        print(f"  Phone number : {phone}")
-        print(f"  Activation id: {activation_id}")
-        print("─" * 48)
-        print("→ Enter this phone number on kimi.com and request the SMS code.")
-        print("  Waiting for the code to arrive…")
 
-    deadline = time.monotonic() + args.timeout
-    code = None
-    head = "STATUS_WAIT_CODE"
-    while time.monotonic() < deadline:
-        head, code = client.get_status(activation_id)
-        if head == "STATUS_OK":
-            break
-        if head == "STATUS_CANCEL":
-            break
-        time.sleep(args.interval)
+    # Money is committed the instant get_number() returns. From here on, make
+    # sure we either hand the user a code or attempt a refund — never let an
+    # error or Ctrl-C leave a paid-for number dangling silently.
+    try:
+        if not args.json:
+            print("─" * 48)
+            print(f"  Phone number : {phone}")
+            print(f"  Activation id: {activation_id}")
+            print("─" * 48)
+            print("→ Enter this phone number on kimi.com and request the SMS code.")
+            print("  Waiting for the code to arrive…")
+
+        deadline = time.monotonic() + args.timeout
+        code, head = None, "STATUS_WAIT_CODE"
+        while time.monotonic() < deadline:
+            head, code = client.get_status(activation_id)
+            if head in ("STATUS_OK", "STATUS_CANCEL"):
+                break
+            time.sleep(max(0, args.interval))
+    except BaseException as exc:  # network error, Ctrl-C, anything
+        refunded = _safe_cancel(client, activation_id, args.keep)
+        note = ("cancelled the number for a refund"
+                if refunded else
+                f"the number may still be open — cancel it with: "
+                f"python3 scripts/herosms.py cancel --id {activation_id}")
+        print(f"\n⚠  Interrupted ({type(exc).__name__}); {note}.", file=sys.stderr)
+        raise
 
     if head == "STATUS_OK":
+        if args.complete:
+            try:
+                client.set_status(activation_id, STATUS_COMPLETE)
+            except HeroSMSError:
+                pass
         if args.json:
             print(json.dumps({"activation_id": activation_id, "phone": phone,
                               "code": code, "status": "OK"}))
@@ -473,19 +560,20 @@ def cmd_register(client: HeroSMS, args) -> int:
             print(f"\n✅ SMS code: {code}\n")
             print("Enter it on kimi.com to finish signing up. Then finalize:")
             print(f"  python3 scripts/herosms.py done --id {activation_id}")
-        if args.complete:
-            client.set_status(activation_id, STATUS_COMPLETE)
         return 0
 
-    # No code arrived (or cancelled): refund by cancelling unless --keep.
-    if not args.keep:
-        try:
-            client.set_status(activation_id, STATUS_CANCEL)
-            cancelled = True
-        except HeroSMSError:
-            cancelled = False
-    else:
-        cancelled = False
+    if head == "STATUS_CANCEL":
+        # Already cancelled/refunded upstream — don't double-cancel or mislead.
+        if args.json:
+            print(json.dumps({"activation_id": activation_id, "phone": phone,
+                              "code": None, "status": "CANCEL", "cancelled": True}))
+        else:
+            print("\nActivation was cancelled by the provider "
+                  "(refunded if it was eligible).")
+        return 3
+
+    # Timed out with no code: refund unless the user asked to keep it.
+    cancelled = _safe_cancel(client, activation_id, args.keep)
     if args.json:
         print(json.dumps({"activation_id": activation_id, "phone": phone,
                           "code": None, "status": head, "cancelled": cancelled}))
@@ -505,25 +593,30 @@ def cmd_register(client: HeroSMS, args) -> int:
 # API-key resolution & argument parsing
 # --------------------------------------------------------------------------- #
 def resolve_api_key(args) -> str:
-    if args.api_key:
+    if args.api_key and args.api_key.strip():
         return args.api_key.strip()
     env = os.environ.get("HEROSMS_API_KEY")
-    if env:
+    if env and env.strip():
         return env.strip()
     candidates = []
     if args.key_file:
         candidates.append(Path(args.key_file))
-    candidates += [ROOT / ".herosms.key", Path.home() / ".herosms.key"]
+    candidates += [Path.cwd() / ".herosms.key",
+                   ROOT / ".herosms.key",
+                   Path.home() / ".herosms.key"]
     for path in candidates:
         try:
             if path.is_file():
-                return path.read_text(encoding="utf-8").strip()
+                text = path.read_text(encoding="utf-8").strip()
+                if text:  # skip empty/whitespace files, keep trying
+                    return text
         except OSError:
             continue
     raise HeroSMSError(
         "NO_KEY",
-        "no API key found. Set HEROSMS_API_KEY, pass --api-key, or create "
-        "./.herosms.key")
+        "no API key found. Set HEROSMS_API_KEY, pass --api-key, or create a "
+        "non-empty .herosms.key in this directory, the repo root, or your home "
+        "directory")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -558,7 +651,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("order", help="buy a number (spends money)")
     p.add_argument("--service", required=True)
-    p.add_argument("--country", help="country id (omit to let HeroSMS choose)")
+    p.add_argument("--country", help="country id (omit to auto-pick the cheapest in budget)")
     p.add_argument("--max", type=float, default=DEFAULT_MAX_PRICE,
                    help=f"max price you'll pay (default {DEFAULT_MAX_PRICE})")
     p.add_argument("--operator", help="preferred operator (optional)")
@@ -587,7 +680,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("register", help="guided: buy cheapest in-budget number + wait for code")
     p.add_argument("--service", required=True, help="service code (e.g. kimi)")
-    p.add_argument("--country", help="country id (omit to let HeroSMS choose cheapest)")
+    p.add_argument("--country", help="country id (omit to auto-pick the cheapest in budget)")
     p.add_argument("--max", type=float, default=DEFAULT_MAX_PRICE,
                    help=f"max price you'll pay (default {DEFAULT_MAX_PRICE})")
     p.add_argument("--operator", help="preferred operator (optional)")
@@ -598,7 +691,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--complete", action="store_true",
                    help="auto-complete (status 6) once the code arrives")
     p.add_argument("--keep", action="store_true",
-                   help="on timeout, keep the activation instead of refunding")
+                   help="on timeout/interrupt, keep the activation instead of refunding")
     p.set_defaults(func=cmd_register)
 
     return parser
@@ -606,9 +699,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    # "--max -1" means "no cap".
-    if getattr(args, "max", None) is not None and args.max < 0:
-        args.max = None
+    # Poll knobs must be non-negative or time.sleep() raises ValueError.
+    for attr in ("interval", "timeout"):
+        val = getattr(args, attr, None)
+        if val is not None and val < 0:
+            setattr(args, attr, 0)
     try:
         api_key = resolve_api_key(args)
         client = HeroSMS(api_key, base_url=args.base_url, timeout=args.http_timeout)
